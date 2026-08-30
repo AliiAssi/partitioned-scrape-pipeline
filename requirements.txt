@@ -1,0 +1,11 @@
+scrapy>=2.13
+pymongo>=4.9
+minio>=7.2
+beautifulsoup4>=4.13
+lxml>=5.3
+pydantic>=2.10
+pydantic-settings>=2.7
+typer>=0.15
+rich>=13.9
+dagster>=1.9
+dagster-webserver>=1.9

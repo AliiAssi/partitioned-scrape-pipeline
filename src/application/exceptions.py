@@ -35,5 +35,9 @@ class DocumentReadError(RecordProcessingError):
     pass
 
 
+class DuplicateCaseReferenceError(RecordProcessingError):
+    pass
+
+
 class ListingParseError(PipelineError):
     pass

@@ -1,3 +1,5 @@
+from dataclasses import replace
+from typing import Iterable, Iterator
 
 from src.application.dto.base.date_partition import DatePartition
 from src.application.dto.base.object_key import ObjectKey
@@ -6,7 +8,7 @@ from src.application.dto.base.partition_work_dto import PartitionWorkDTO
 from src.application.dto.base.source_body import SourceBody
 from src.application.dto.base.storage_outcome_dto import StorageOutcomeDTO
 from src.application.dto.ingestion.ingest_partition_input_dto import CrawledItemDTO, IngestPartitionInputDTO
-from src.application.exceptions import DocumentDownloadError
+from src.application.exceptions import DocumentDownloadError, DuplicateCaseReferenceError
 from src.application.services.base_partition_processing_service import BasePartitionProcessingService
 from src.application.services.run_summary_service import RunSummaryService
 from src.application.services.sources.source_registry import SourceRegistry
@@ -46,10 +48,18 @@ class IngestionService(BasePartitionProcessingService, IIngestionService):
 
     def collect_items_for_partition(self, partition: DatePartition, body: SourceBody, source_name: str) -> PartitionWorkDTO:
         # used for the crawl itself, which returns one item per record the listing showed
-        return self._crawl_runner.crawl_partition(source_name, body, partition)
+        work = self._crawl_runner.crawl_partition(source_name, body, partition)
+        return replace(work, items=list(_reject_repeated_case_references(work.items)))
 
     def process_single_item(self, item: CrawledItemDTO, partition: DatePartition, body: SourceBody, source_name: str) -> StorageOutcomeDTO:
         # used for storing one raw document exactly as the site served it
+        if item.error_code == DUPLICATE_ERROR_CODE:
+            raise DuplicateCaseReferenceError(
+                item.error_reason or "case reference already seen in this partition",
+                identifier=item.record.identifier,
+                url=item.record.document_url,
+                error_code=item.error_code,
+            )
         if item.failed:
             raise DocumentDownloadError(
                 item.error_reason or "document could not be downloaded",
@@ -69,6 +79,33 @@ class IngestionService(BasePartitionProcessingService, IIngestionService):
             item.payload,
             object_key,
             comparison_content=source_service.normalise_for_comparison(item.payload, item.record.content_type),
+        )
+
+
+DUPLICATE_ERROR_CODE = "duplicate_case_reference"
+
+
+def _reject_repeated_case_references(items: Iterable[CrawledItemDTO]) -> Iterator[CrawledItemDTO]:
+    # the site publishes two different decisions under one case reference often enough to matter
+    # (measured: 2 of 629 over Jan-Feb 2024, in both the WRC and Labour Court sets). that reference
+    # is the mongo _id, and it is the curated filename the brief mandates, so the second document
+    # cannot be stored under any key we have. it is reported as a failed record with both urls
+    # rather than silently overwriting the first, which is what used to happen.
+    first_url_by_id: dict[str, str] = {}
+    for item in items:
+        already = first_url_by_id.get(item.record.storage_id)
+        if already is None:
+            first_url_by_id[item.record.storage_id] = item.record.document_url
+            yield item
+            continue
+        yield replace(
+            item,
+            payload=None,
+            error_code=DUPLICATE_ERROR_CODE,
+            error_reason=(
+                f"case reference {item.record.identifier!r} is already used in this partition by "
+                f"{already}; this row is a different document at {item.record.document_url}"
+            ),
         )
 
 

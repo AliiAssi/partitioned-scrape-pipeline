@@ -115,7 +115,9 @@ class RecordEmittingPipeline:
         else:
             content_type = item.get("content_type") or record.content_type
             extension = extension_for(content_type, record.document_url)
-            filename = f"{slugify_identifier(record.identifier)}.{extension}"
+            # the counter is what keeps two rows apart when they share a case reference: the site
+            # does reuse them, and without it both rows read back whichever document landed last
+            filename = f"{slugify_identifier(record.identifier)}-{self._handled}.{extension}"
             (self._documents_dir / filename).write_bytes(payload)
             row.update({"local_path": str(self._documents_dir / filename), "content_type": content_type, "error_code": None, "error_reason": None})
 
